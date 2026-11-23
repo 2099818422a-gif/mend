@@ -729,28 +729,37 @@ function parseV4a(lines: string[], ctx: ParseCtx): Edit[] {
     const sec: VSection = { kind, path, moveTo: null, lines: [], chunks: [], line: i + 1 };
     i++;
     if (kind === 'add') {
-      const raw: string[] = [];
+      // Blank lines at the end of a section are not part of it, so a
+      // whitespace-only line is only an error when a real line follows it
+      // in the section: it is neither a `+` line nor an empty line.
+      const raw: { text: string | null; line: number }[] = [];
       while (i < last) {
         const b = lines[i]!;
         if (isSectionStart(b)) break;
         if (b.startsWith('+')) {
-          raw.push(b.slice(1));
+          raw.push({ text: b.slice(1), line: i + 1 });
           i++;
           continue;
         }
         if (b === '') {
-          raw.push('');
+          raw.push({ text: '', line: i + 1 });
           i++;
           continue;
         }
         if (blank(b)) {
+          raw.push({ text: null, line: i + 1 });
           i++;
           continue;
         }
         throw new Exit2(`error: parse ${i + 1}`);
       }
-      while (raw.length > 0 && raw[raw.length - 1] === '') raw.pop();
-      sec.lines = raw;
+      while (raw.length > 0 && (raw[raw.length - 1]!.text === '' || raw[raw.length - 1]!.text === null)) raw.pop();
+      const got: string[] = [];
+      for (const e of raw) {
+        if (e.text === null) throw new Exit2(`error: parse ${e.line}`);
+        got.push(e.text);
+      }
+      sec.lines = got;
     } else if (kind === 'delete') {
       while (i < last) {
         const b = lines[i]!;
@@ -808,7 +817,9 @@ function parseV4a(lines: string[], ctx: ParseCtx): Edit[] {
         }
         if (b.startsWith('@@')) {
           closeChunk(false);
-          cur = { anchor: b.slice(2).trim(), items: [] };
+          // Section 8: an empty anchor text is no anchor.
+          const anchor = b.slice(2).trim();
+          cur = { anchor: anchor === '' ? null : anchor, items: [] };
           afterEof = false;
           sawFirst = true;
           i++;
@@ -831,10 +842,10 @@ function parseV4a(lines: string[], ctx: ParseCtx): Edit[] {
           i++;
           continue;
         }
-        if (blank(b)) {
-          i++;
-          continue;
-        }
+        // A blank line that is not empty and does not start with a body
+        // prefix is not a body line: section 8 allows blank lines only
+        // between sections and at the end of a section (both stripped
+        // before this loop), so it is a parse error.
         throw new Exit2(`error: parse ${i + 1}`);
       }
       closeChunk(false);
